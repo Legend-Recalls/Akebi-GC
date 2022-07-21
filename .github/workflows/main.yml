@@ -1,12 +1,20 @@
-name: Publish
+name: MSBuild
 
 on:
-   push:
+  push:
+    branches: [ master ]
+  pull_request:
     branches: [ master ]
 
 env:
+  # Path to the solution file relative to the root of the project.
   SOLUTION_FILE_PATH: ./akebi-gc.sln
+
+  # Configuration type to build.
+  # You can convert this to a build matrix if you need coverage of multiple configuration types.
+  # https://docs.github.com/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
   BUILD_CONFIGURATION: Release
+  tag1: V${{ github.run_number }}
 
 permissions:
   contents: read
@@ -16,35 +24,53 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v3
+
+    - uses: actions/checkout@v1
       with:
         submodules: recursive
-
-    - name: Install MSBuild
+    - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
 
-    # Optional, because current solution is executing custom command line after finishing build
-    # Repo does not affected
-    # Using hardcoded path and string
-    - name: Remove Custom Build Steps
-      shell: bash
-      run: |
-        curl -o CustomBuildStepsDisabler.exe https://raw.githubusercontent.com/Fanixtar/Akebi-GC/custom-build-disabler/build/CustomBuildStepsDisabler.exe
-        ./CustomBuildStepsDisabler.exe
-        
-    - name: Build Akebi-GC solution
-      working-directory: ./
-      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
-        
-    - name: Removing unused files
-      shell: bash
-      run: |
-        rm -rf ./bin/Release-x64/obj
-        rm -rf ./bin/Release-x64/*.pdb
+
+
+    - name: Restore NuGet packages
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: nuget restore ${{env.SOLUTION_FILE_PATH}}
       
-    - name: Upload Akebi-GC latest artifact
-      uses: actions/upload-artifact@v3.1.0
+    - name: Build
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      timeout-minutes: 3
+      continue-on-error: true
+      # Add additional options to the MSBuild command line here (like platform or verbosity level).
+      # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
+      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
+    
+    - name: zip
+      run: 7z a bin.zip bin\Release-x64\injector.exe bin\Release-x64\CLibrary.dll
+      
+    - name: upload artifacts
+      uses: actions/upload-artifact@v3
       with:
-        name: Akebi-GC-release
-        path: ./bin/Release-x64/*
-        if-no-files-found: error
+        name: my-artifact
+        path: bin.zip
+        
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download a Build Artifact
+        uses: actions/download-artifact@v3.0.0
+        with:
+          name: my-artifact
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+          tag_name: ${{env.tag1}}
+          files: bin.zip
+          
+      
